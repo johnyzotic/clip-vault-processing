@@ -187,6 +187,9 @@ def ytdlp_base_opts() -> dict:
         "quiet": True,
         "retries": 2,  # a flagged IP fails fast; the outer retry rotates to a new IP
         "sleep_interval_requests": 1,
+        # Residential-proxy reads are slower than direct, especially from a cloud
+        # runner — the default 20s socket timeout aborts mid-download. Give it room.
+        "socket_timeout": 60,
         "extractor_args": {"youtube": {"player_client": ["android_vr", "default"]}},
     }
     cookies = ytdlp_cookie_file()
