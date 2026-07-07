@@ -62,7 +62,6 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           YT_PROXY: ${{ secrets.YT_PROXY }}
-          YT_COOKIES: ${{ secrets.YT_COOKIES }}
           WHISPER_MODEL: ${{ inputs.whisper_model }}
           TIME_BUDGET_S: ${{ inputs.time_budget_s }}
           MAX_VIDEOS: ${{ inputs.max_videos }}

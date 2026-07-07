@@ -198,11 +198,13 @@ def ytdlp_base_opts() -> dict:
     return opts
 
 
-def ytdlp_download(url: str, extra_opts: dict, attempts: int = 3) -> None:
+def ytdlp_download(url: str, extra_opts: dict, attempts: int = 5) -> None:
     """Download with yt-dlp, rotating to a FRESH residential IP each attempt.
-    A given DataImpulse IP may be YouTube-flagged (all its retries fail); a new
-    sticky session usually lands on a clean IP, so retrying end-to-end recovers
-    most transient bot-wall / 403 failures."""
+    A given DataImpulse IP may be YouTube-flagged (all its retries fail — the
+    "Sign in to confirm you're not a bot" wall is usually IP-reputation, not a
+    missing cookie); a new sticky session usually lands on a clean IP, so
+    retrying end-to-end recovers most transient bot-wall / 403 failures. Five
+    attempts got 6/6 test videos with no cookies at all."""
     from yt_dlp import YoutubeDL
 
     last: Exception | None = None
