@@ -151,6 +151,50 @@ def _color_name(r: int, g: int, b: int) -> str:
     return best
 
 
+# ── FTB logo color ───────────────────────────────────────────────────
+def _ftb_logo_color(frames) -> list[dict]:
+    """The persistent 'FTB' bug sits in the bottom-left corner; its color varies
+    per video. Grab the most consistent VIVID color from that corner (vivid
+    filtering + cross-frame aggregation rejects the muted background)."""
+    import cv2
+    import numpy as np
+    from sklearn.cluster import KMeans
+
+    vivid = []
+    for _ms, img in frames:
+        h, w = img.shape[:2]
+        crop = img[int(0.80 * h):h, 0:int(0.17 * w)]
+        if crop.size == 0:
+            continue
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        mask = (hsv[:, :, 1] > 95) & (hsv[:, :, 2] > 60)  # saturated + not too dark
+        px = crop[mask]
+        if len(px) >= 8:
+            vivid.append(px.reshape(-1, 3))
+    if not vivid:
+        return []
+    data = np.concatenate(vivid, axis=0)
+    if len(data) < 25:
+        return []
+
+    lab = cv2.cvtColor(data.reshape(-1, 1, 3), cv2.COLOR_BGR2LAB).reshape(-1, 3).astype("float32")
+    k = min(2, len(lab))
+    km = KMeans(n_clusters=k, n_init=4, random_state=0).fit(lab)
+    counts = collections.Counter(km.labels_.tolist())
+    idx = counts.most_common(1)[0][0]
+    labc = np.uint8([[km.cluster_centers_[idx]]])
+    b, g, r = cv2.cvtColor(labc, cv2.COLOR_LAB2BGR)[0][0].tolist()
+    name = _color_name(int(r), int(g), int(b))
+    return [{
+        "type": "ftb_logo_color",
+        "slug": f"ftb:{name.replace(' ', '-')}",
+        "label": f"{name} FTB logo",
+        "confidence": round(counts[idx] / sum(counts.values()), 3),
+        "first_seen_ms": 0,
+        "extra": {"hex": f"#{int(r):02x}{int(g):02x}{int(b):02x}"},
+    }]
+
+
 # ── CLIP zero-shot keywords/objects/scenes ───────────────────────────
 def _load_clip():
     if _clip["model"] is not None:
@@ -207,23 +251,85 @@ def _load_face():
     _face["app"] = fa
 
 
-def _people_tags(frames) -> list[dict]:
-    """Aggregate face detections into person_attribute tags. Gender/age are ESTIMATES."""
+def _detect_faces(frames) -> list[tuple]:
+    """Run face detection once; return [(ms, img, faces)] for reuse by people +
+    clothing-color tagging (InsightFace on CPU is the slow part — do it once)."""
     if not frames:
         return []
     _load_face()
     fa = _face["app"]
+    out = []
+    for ms, img in frames:
+        try:
+            faces = fa.get(img)
+        except Exception:
+            faces = []
+        out.append((ms, img, faces))
+    return out
+
+
+def _clothing_colors(detections) -> list[dict]:
+    """Dominant color of the torso region below the largest face per frame,
+    aggregated → clothing_color tags. Approximate (color, not garment)."""
+    import cv2
+    import numpy as np
+    from sklearn.cluster import KMeans
+
+    crops = []
+    for _ms, img, faces in detections:
+        if not faces:
+            continue
+        f = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        x1, y1, x2, y2 = (int(v) for v in f.bbox)
+        fw, fh = x2 - x1, y2 - y1
+        if fw <= 0 or fh <= 0:
+            continue
+        h, w = img.shape[:2]
+        tx1, tx2 = max(0, int(x1 - 0.35 * fw)), min(w, int(x2 + 0.35 * fw))
+        ty1, ty2 = min(h, int(y2 + 0.15 * fh)), min(h, int(y2 + 2.6 * fh))
+        if ty2 - ty1 < 12 or tx2 - tx1 < 12:
+            continue
+        small = cv2.resize(img[ty1:ty2, tx1:tx2], (32, 48))
+        crops.append(cv2.cvtColor(small, cv2.COLOR_BGR2LAB).reshape(-1, 3))
+    if not crops:
+        return []
+
+    data = np.concatenate(crops, axis=0).astype("float32")
+    k = min(3, max(1, len(data)))
+    km = KMeans(n_clusters=k, n_init=4, random_state=0).fit(data)
+    counts = collections.Counter(km.labels_.tolist())
+    total = sum(counts.values())
+
+    tags, seen = [], set()
+    for idx, cnt in counts.most_common(2):  # up to 2 dominant clothing colors
+        lab = np.uint8([[km.cluster_centers_[idx]]])
+        b, g, r = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)[0][0].tolist()
+        name = _color_name(int(r), int(g), int(b))
+        if name in seen:
+            continue
+        seen.add(name)
+        tags.append({
+            "type": "clothing_color",
+            "slug": f"clothing:{name.replace(' ', '-')}",
+            "label": f"{name} clothing",
+            "confidence": round(cnt / total, 3),
+            "first_seen_ms": 0,
+            "extra": {"hex": f"#{int(r):02x}{int(g):02x}{int(b):02x}"},
+        })
+    return tags
+
+
+def _people_tags(detections) -> list[dict]:
+    """Aggregate face detections into person_attribute tags. Gender/age are ESTIMATES."""
+    if not detections:
+        return []
 
     genders = {"male": [], "female": []}  # confidence samples
     first_seen = {"male": None, "female": None}
     ages = []
     any_person_ms = None
 
-    for ms, img in frames:
-        try:
-            faces = fa.get(img)
-        except Exception:
-            faces = []
+    for ms, _img, faces in detections:
         for f in faces:
             if any_person_ms is None:
                 any_person_ms = ms
@@ -268,7 +374,10 @@ def tag_video(video_id: str, youtube_id: str) -> None:
 
         colors = _dominant_colors(frames)
         clip_seen = _clip_tags(frames)
-        people = _people_tags(frames)
+        detections = _detect_faces(frames)
+        people = _people_tags(detections)
+        clothing = _clothing_colors(detections)
+        ftb = _ftb_logo_color(frames)
 
     tagspecs: list[dict] = []
     for i, ms in clip_seen.items():
@@ -276,6 +385,8 @@ def tag_video(video_id: str, youtube_id: str) -> None:
         tagspecs.append({"type": ttype, "slug": slug, "label": label,
                          "confidence": 0.6, "first_seen_ms": ms})
     tagspecs.extend(people)
+    tagspecs.extend(clothing)
+    tagspecs.extend(ftb)
     # dominant colors also become filterable color tags
     for c in colors[:3]:
         tagspecs.append({"type": "color", "slug": f"color:{c['name'].replace(' ', '-')}",
