@@ -53,7 +53,9 @@ jobs:
           restore-keys: models-
 
       - name: Install PyTorch (CPU)
-        run: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+        # All three from the CPU index so their versions match — a mismatched
+        # torchvision breaks open_clip with "operator torchvision::nms does not exist".
+        run: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install dependencies
         run: pip install -r jobs/requirements-ci.txt
