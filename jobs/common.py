@@ -190,7 +190,10 @@ def ytdlp_base_opts() -> dict:
         # Residential-proxy reads are slower than direct, especially from a cloud
         # runner — the default 20s socket timeout aborts mid-download. Give it room.
         "socket_timeout": 60,
-        "extractor_args": {"youtube": {"player_client": ["android_vr", "default"]}},
+        # android_vr is the reliable non-DRM client; ios is a clean fallback.
+        # Avoid the default/web client — it's SABR-forced and yields "only images
+        # available" (→ "requested format is not available") when extraction is flaky.
+        "extractor_args": {"youtube": {"player_client": ["android_vr", "ios"]}},
     }
     cookies = ytdlp_cookie_file()
     if cookies:
