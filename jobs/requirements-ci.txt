@@ -1,0 +1,15 @@
+# CPU dependencies for the GitHub Actions backfill runners.
+# torch + torchaudio are installed separately from the CPU wheel index in the
+# workflow (the default index pulls the huge CUDA build we don't need).
+psycopg[binary]==3.2.*
+yt-dlp
+faster-whisper
+demucs
+open_clip_torch
+insightface
+onnxruntime
+opencv-python-headless
+scikit-learn
+scenedetect
+pillow
+numpy
